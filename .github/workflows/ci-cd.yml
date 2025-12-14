@@ -2,9 +2,7 @@ name: CI/CD Pipeline
 
 on:
   push:
-    branches: [ main, develop, gitops ]
-  pull_request:
-    branches: [ main ]
+    branches: [ main, gitops ]
 
 env:
   AWS_REGION: us-west-2

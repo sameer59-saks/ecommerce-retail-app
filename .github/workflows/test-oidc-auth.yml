@@ -1,0 +1,23 @@
+name: Test OIDC Auth
+
+on:
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  test-oidc:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Configure AWS credentials with OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::463470973994:role/GitHubActionsRole
+          aws-region: us-west-2
+
+      - name: Test AWS access
+        run: |
+          aws sts get-caller-identity
+          aws ecr describe-repositories --repository-names ecommerce-store --region us-west-2
