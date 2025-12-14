@@ -4,9 +4,9 @@
 
 replicaCount: 1
 image:
-  repository: public.ecr.aws/aws-containers/retail-store-sample-orders
+  repository: 463470973994.dkr.ecr.us-west-2.amazonaws.com/ecommerce-store
   pullPolicy: Always
-  tag: "1.2.2"
+  tag: "orders-7f55821"
 imagePullSecrets:
   - name: regcred
 nameOverride: ""
