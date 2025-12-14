@@ -1,0 +1,248 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [ main, gitops ]
+
+env:
+  AWS_REGION: us-west-2
+  ECR_REGISTRY: ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.us-west-2.amazonaws.com
+  ECR_REPOSITORY: ecommerce-store
+
+jobs:
+  detect-changes:
+    name: Detect Service Changes
+    runs-on: ubuntu-latest
+    outputs:
+      changed-services: ${{ steps.filter.outputs.changes }}
+      has-changes: ${{ steps.check-changes.outputs.has-changes }}
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      
+      - name: Detect service changes
+        uses: dorny/paths-filter@v2
+        id: filter
+        with:
+          list-files: json
+          filters: |
+            cart:
+              - 'src/cart/**'
+            catalog:
+              - 'src/catalog/**'
+            checkout:
+              - 'src/checkout/**'
+            orders:
+              - 'src/orders/**'
+            ui:
+              - 'src/ui/**'
+
+      - name: Check if any services changed
+        id: check-changes
+        run: |
+          CHANGED_SERVICES='${{ steps.filter.outputs.changes }}'
+          if [ "$CHANGED_SERVICES" != "[]" ] && [ "$CHANGED_SERVICES" != "" ]; then
+            echo "has-changes=true" >> $GITHUB_OUTPUT
+            echo "✅ Services changed: $CHANGED_SERVICES"
+          else
+            echo "has-changes=false" >> $GITHUB_OUTPUT
+            echo "ℹ️ No service changes detected"
+          fi
+
+      - name: Set matrix for changed services
+        id: set-matrix
+        run: |
+          CHANGED_SERVICES='${{ steps.filter.outputs.changes }}'
+          
+          # Build matrix JSON for changed services only
+          MATRIX_JSON='{"include":['
+          FIRST=true
+          
+          for service in $(echo $CHANGED_SERVICES | jq -r '.[]'); do
+            if [ "$FIRST" = true ]; then
+              FIRST=false
+            else
+              MATRIX_JSON+=','
+            fi
+            
+            # Add service configuration
+            case $service in
+              "cart")
+                MATRIX_JSON+="{\"service\":\"cart\",\"dockerfile\":\"src/cart/Dockerfile\",\"context\":\"src/cart\",\"language\":\"java\"}"
+                ;;
+              "catalog")
+                MATRIX_JSON+="{\"service\":\"catalog\",\"dockerfile\":\"src/catalog/Dockerfile\",\"context\":\"src/catalog\",\"language\":\"go\"}"
+                ;;
+              "checkout")
+                MATRIX_JSON+="{\"service\":\"checkout\",\"dockerfile\":\"src/checkout/Dockerfile\",\"context\":\"src/checkout\",\"language\":\"nodejs\"}"
+                ;;
+              "orders")
+                MATRIX_JSON+="{\"service\":\"orders\",\"dockerfile\":\"src/orders/Dockerfile\",\"context\":\"src/orders\",\"language\":\"java\"}"
+                ;;
+              "ui")
+                MATRIX_JSON+="{\"service\":\"ui\",\"dockerfile\":\"src/ui/Dockerfile\",\"context\":\"src/ui\",\"language\":\"java\"}"
+                ;;
+            esac
+          done
+          
+          MATRIX_JSON+=']}'
+          
+          echo "matrix=$MATRIX_JSON" >> $GITHUB_OUTPUT
+          echo "🔧 Generated matrix: $MATRIX_JSON"
+
+  build-and-push:
+    name: Build & Push (${{ matrix.service }})
+    needs: detect-changes
+    if: needs.detect-changes.outputs.has-changes == 'true'
+    runs-on: ubuntu-latest
+    
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.detect-changes.outputs.matrix) }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up build info
+        id: build-info
+        run: |
+          echo "image-tag=${{ matrix.service }}-${{ github.sha }}" >> $GITHUB_OUTPUT
+          echo "latest-tag=${{ matrix.service }}-latest" >> $GITHUB_OUTPUT
+          echo "full-image=${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}" >> $GITHUB_OUTPUT
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build and push Docker image
+        run: |
+          echo "🔨 Building ${{ matrix.service }} (${{ matrix.language }}) image..."
+          
+          # Build image with both tags
+          docker build \
+            -t ${{ steps.build-info.outputs.full-image }}:${{ steps.build-info.outputs.image-tag }} \
+            -t ${{ steps.build-info.outputs.full-image }}:${{ steps.build-info.outputs.latest-tag }} \
+            -f ${{ matrix.dockerfile }} \
+            ${{ matrix.context }}
+          
+          echo "📤 Pushing ${{ matrix.service }} image to ECR..."
+          docker push ${{ steps.build-info.outputs.full-image }}:${{ steps.build-info.outputs.image-tag }}
+          docker push ${{ steps.build-info.outputs.full-image }}:${{ steps.build-info.outputs.latest-tag }}
+          
+          echo "✅ Successfully pushed:"
+          echo "  - ${{ steps.build-info.outputs.full-image }}:${{ steps.build-info.outputs.image-tag }}"
+          echo "  - ${{ steps.build-info.outputs.full-image }}:${{ steps.build-info.outputs.latest-tag }}"
+
+  update-helm-charts:
+    name: Update Helm Charts (${{ matrix.service }})
+    needs: [detect-changes, build-and-push]
+    if: needs.detect-changes.outputs.has-changes == 'true'
+    runs-on: ubuntu-latest
+    
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.detect-changes.outputs.matrix) }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
+
+      - name: Set up Git
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+
+      - name: Update Helm chart values
+        id: update-chart
+        run: |
+          SERVICE="${{ matrix.service }}"
+          IMAGE_TAG="${{ matrix.service }}-${{ github.sha }}"
+          CHART_PATH="src/$SERVICE/chart/values.yaml"
+          
+          echo "📝 Updating $SERVICE Helm chart..."
+          
+          # Update image repository and tag
+          sed -i "s|repository: .*|repository: ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}|g" "$CHART_PATH"
+          sed -i "s|tag: \".*\"|tag: \"$IMAGE_TAG\"|g" "$CHART_PATH"
+          
+          echo "✅ Updated $SERVICE chart with:"
+          echo "  - Repository: ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}"
+          echo "  - Tag: $IMAGE_TAG"
+
+      - name: Commit and push changes
+        run: |
+          SERVICE="${{ matrix.service }}"
+          COMMIT_MSG="🚀 Update $SERVICE image to ${{ matrix.service }}-${{ github.sha }}"
+          
+          # Pull latest changes to avoid conflicts
+          git pull origin gitops
+          
+          # Stage changes
+          git add "src/$SERVICE/chart/values.yaml"
+          
+          # Check if there are changes to commit
+          if git diff --staged --quiet; then
+            echo "ℹ️ No changes to commit for $SERVICE"
+          else
+            echo "📤 Committing and pushing changes for $SERVICE..."
+            git commit -m "$COMMIT_MSG"
+            
+            # Retry push with pull in case of conflicts
+            for i in {1..3}; do
+              if git push; then
+                echo "✅ Successfully pushed $SERVICE chart update"
+                break
+              else
+                echo "⚠️ Push failed, retrying... (attempt $i/3)"
+                git pull --rebase origin gitops
+              fi
+            done
+            echo "✅ Successfully updated $SERVICE Helm chart"
+          fi
+
+  deployment-summary:
+    name: Deployment Summary
+    needs: [detect-changes, build-and-push, update-helm-charts]
+    if: always() && needs.detect-changes.outputs.has-changes == 'true'
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Generate deployment summary
+        run: |
+          echo "# 🚀 Deployment Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## Changed Services" >> $GITHUB_STEP_SUMMARY
+          echo '```json' >> $GITHUB_STEP_SUMMARY
+          echo '${{ needs.detect-changes.outputs.changed-services }}' >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## Job Results" >> $GITHUB_STEP_SUMMARY
+          echo "- 🔍 Change Detection: ${{ needs.detect-changes.result }}" >> $GITHUB_STEP_SUMMARY
+          echo "- 🔨 Build & Push: ${{ needs.build-and-push.result }}" >> $GITHUB_STEP_SUMMARY
+          echo "- 📝 Helm Updates: ${{ needs.update-helm-charts.result }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## Images Built" >> $GITHUB_STEP_SUMMARY
+          
+          for service in $(echo '${{ needs.detect-changes.outputs.changed-services }}' | jq -r '.[]'); do
+            echo "- \`${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:${service}-${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
+          done
+          
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## Next Steps" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ Helm charts updated with new image tags" >> $GITHUB_STEP_SUMMARY
+          echo "- 🔄 ArgoCD will detect and deploy changes automatically" >> $GITHUB_STEP_SUMMARY
+          echo "- 📊 Monitor ArgoCD dashboard for deployment status" >> $GITHUB_STEP_SUMMARY

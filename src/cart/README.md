@@ -1,6 +1,8 @@
 # AWS Containers Retail Sample - Cart Service
 
 <!-- GitOps Test: Multi-service deploy test - Cart -->
+<!-- CI/CD Pipeline Test: Updated for automated deployment -->
+<!-- Credentials Fix Test: Testing after GitHub Secrets recreation -->
 
 | Language | Persistence     |
 | -------- | --------------- |
