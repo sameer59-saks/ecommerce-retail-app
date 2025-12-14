@@ -1,6 +1,7 @@
 # AWS Containers Retail Sample - Catalog Service
 
 <!-- GitOps Test: Final workflow validation -->
+<!-- CI/CD Pipeline Test: Updated for automated deployment -->
 
 | Language | Persistence |
 | -------- | ----------- |
