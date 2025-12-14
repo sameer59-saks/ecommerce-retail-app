@@ -4,11 +4,11 @@
 
 replicaCount: 1
 image:
-  repository: public.ecr.aws/aws-containers/retail-store-sample-catalog
+  repository: 463470973994.dkr.ecr.us-west-2.amazonaws.com/ecommerce-store
   pullPolicy: Always
-  tag: "1.2.2"
-imagePullSecrets:
-  - name: regcred
+  tag: "catalog-latest"
+# imagePullSecrets:
+#   - name: regcred
 nameOverride: ""
 fullnameOverride: ""
 serviceAccount:
