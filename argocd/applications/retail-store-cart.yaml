@@ -9,7 +9,7 @@ spec:
   project: retail-store
   source: 
     repoURL: https://github.com/sameer59-saks/ecommerce-retail-app.git
-    targetRevision: main
+    targetRevision: gitops
     path: src/cart/chart
     helm:
       valueFiles:
