@@ -1,0 +1,107 @@
+name: Debug CI/CD
+
+on:
+  workflow_dispatch:
+
+env:
+  AWS_REGION: us-west-2
+  ECR_REGISTRY: ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.us-west-2.amazonaws.com
+  ECR_REPOSITORY: ecommerce-store
+
+jobs:
+  debug-secrets:
+    name: Debug Secrets & Auth
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check secrets
+        run: |
+          echo "AWS Account ID length: ${#AWS_ACCOUNT_ID}"
+          echo "AWS Access Key length: ${#AWS_ACCESS_KEY_ID}"
+          echo "AWS Secret Key length: ${#AWS_SECRET_ACCESS_KEY}"
+        env:
+          AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Test ECR access
+        run: |
+          echo "Testing ECR authentication..."
+          aws ecr get-login-password --region ${{ env.AWS_REGION }}
+          echo "Testing ECR repository access..."
+          aws ecr describe-repositories --repository-names ${{ env.ECR_REPOSITORY }} --region ${{ env.AWS_REGION }}
+
+  debug-matrix:
+    name: Debug Matrix Generation
+    runs-on: ubuntu-latest
+    outputs:
+      test-matrix: ${{ steps.set-matrix.outputs.matrix }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Test matrix generation
+        id: set-matrix
+        run: |
+          # Simulate changed services
+          CHANGED_SERVICES='["cart", "catalog"]'
+          
+          # Build matrix JSON
+          MATRIX_JSON='{"include":['
+          FIRST=true
+          
+          for service in $(echo $CHANGED_SERVICES | jq -r '.[]'); do
+            if [ "$FIRST" = true ]; then
+              FIRST=false
+            else
+              MATRIX_JSON+=','
+            fi
+            
+            case $service in
+              "cart")
+                MATRIX_JSON+="{\"service\":\"cart\",\"dockerfile\":\"src/cart/Dockerfile\",\"context\":\"src/cart\",\"language\":\"java\"}"
+                ;;
+              "catalog")
+                MATRIX_JSON+="{\"service\":\"catalog\",\"dockerfile\":\"src/catalog/Dockerfile\",\"context\":\"src/catalog\",\"language\":\"go\"}"
+                ;;
+            esac
+          done
+          
+          MATRIX_JSON+=']}'
+          
+          echo "matrix=$MATRIX_JSON" >> $GITHUB_OUTPUT
+          echo "Generated matrix: $MATRIX_JSON"
+
+  test-build:
+    name: Test Build (${{ matrix.service }})
+    needs: debug-matrix
+    runs-on: ubuntu-latest
+    strategy:
+      matrix: ${{ fromJson(needs.debug-matrix.outputs.test-matrix) }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Test Docker build
+        run: |
+          echo "Testing Docker build for ${{ matrix.service }}"
+          echo "Dockerfile: ${{ matrix.dockerfile }}"
+          echo "Context: ${{ matrix.context }}"
+          echo "Language: ${{ matrix.language }}"
+          
+          # Test if Dockerfile exists
+          if [ -f "${{ matrix.dockerfile }}" ]; then
+            echo "✅ Dockerfile exists"
+          else
+            echo "❌ Dockerfile not found: ${{ matrix.dockerfile }}"
+            exit 1
+          fi
+          
+          # Test Docker build (without push)
+          docker build -t test-image:${{ matrix.service }} -f ${{ matrix.dockerfile }} ${{ matrix.context }}
