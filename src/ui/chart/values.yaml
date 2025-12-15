@@ -1,6 +1,7 @@
 # Default values for ui.
 # This is a YAML-formatted file.
 # Declare variables to be passed into your templates.
+# Updated to trigger CI/CD pipeline
 
 replicaCount: 1
 image:
