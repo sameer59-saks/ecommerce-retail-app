@@ -55,3 +55,8 @@ variable "enable_monitoring" {
   type        = bool
   default     = false
 }
+variable "domain_name" {
+  description = "Domain name for ingress hosts (optional)"
+  type        = string
+  default     = null
+}
